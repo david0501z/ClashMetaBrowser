@@ -10,6 +10,7 @@ on:
 jobs:
   BuildRelease:
     runs-on: ubuntu-latest
+    environment: android
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
