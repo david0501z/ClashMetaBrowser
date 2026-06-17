@@ -8,6 +8,14 @@ plugins {
     id("com.android.application")
 }
 
+android {
+    namespace = "com.github.kr328.clash"
+
+    buildFeatures {
+        dataBinding = true
+    }
+}
+
 dependencies {
     compileOnly(project(":hideapi"))
 
@@ -26,6 +34,8 @@ dependencies {
     implementation(libs.google.material)
     implementation(libs.quickie.bundled)
     implementation(libs.androidx.activity.ktx)
+    implementation(libs.androidx.webkit)
+    implementation(libs.androidx.swiperefreshlayout)
 }
 
 tasks.getByName("clean", type = Delete::class) {

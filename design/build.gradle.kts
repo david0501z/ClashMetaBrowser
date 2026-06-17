@@ -4,6 +4,12 @@ plugins {
     id("com.android.library")
 }
 
+android {
+    buildFeatures {
+        dataBinding = true
+    }
+}
+
 dependencies {
     implementation(project(":common"))
     implementation(project(":core"))

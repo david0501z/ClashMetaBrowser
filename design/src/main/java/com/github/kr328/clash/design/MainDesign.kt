@@ -22,6 +22,7 @@ class MainDesign(context: Context) : Design<MainDesign.Request>(context) {
         OpenLogs,
         OpenSettings,
         OpenHelp,
+        OpenBrowser,
         OpenAbout,
     }
 

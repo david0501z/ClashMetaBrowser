@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
     <uses-feature
         android:name="android.software.leanback"
         android:required="false" />
@@ -175,6 +178,21 @@
             android:configChanges="uiMode"
             android:exported="false"
             android:label="@string/help" />
+        <activity
+            android:name=".BrowserActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:label="@string/browser" />
+        <activity
+            android:name=".DownloadManagerActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:label="@string/download_manager" />
+        <activity
+            android:name=".HistoryManagerActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:label="@string/history" />
         <activity
             android:name=".FilesActivity"
             android:configChanges="uiMode"

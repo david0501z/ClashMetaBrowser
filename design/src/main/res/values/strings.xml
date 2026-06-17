@@ -370,4 +370,17 @@
     <string name="shortcut_start_long">Start Clash service</string>
     <string name="shortcut_stop_short">Stop Clash</string>
     <string name="shortcut_stop_long">Stop Clash service</string>
+
+    <!-- Browser -->
+    <string name="browser">Browser</string>
+    <string name="download_manager">Download Manager</string>
+    <string name="enter_url">Enter URL</string>
+    <string name="reload">Reload</string>
+    <string name="back">Back</string>
+    <string name="forward">Forward</string>
+    <string name="new_tab">New Tab</string>
+    <string name="add_tab">New Tab</string>
+    <string name="tabs_count">Tabs</string>
+    <string name="download">Download</string>
+    <string name="menu">Menu</string>
 </resources>
