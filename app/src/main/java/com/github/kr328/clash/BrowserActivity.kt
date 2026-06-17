@@ -912,9 +912,9 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
         }
     }
     
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        val newUrl = intent?.getStringExtra("url")
+        val newUrl = intent.getStringExtra("url")
         // 从外部 intent 接收 URL 时创建新标签，不覆盖当前标签
         if (!newUrl.isNullOrBlank()) {
             designRef?.let { createNewTab(it, newUrl) }
