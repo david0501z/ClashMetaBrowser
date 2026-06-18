@@ -104,13 +104,3 @@ jobs:
             --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Release Changelog Builder
-        uses: mikepenz/release-changelog-builder-action@v4.1.1
-        with:
-          configurationJson: |
-            {
-              "ignore_labels": [
-                "Update"
-              ],
-            }
