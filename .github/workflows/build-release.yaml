@@ -100,6 +100,7 @@ jobs:
         run: |
           gh release create ${{ inputs.release-tag }} \
             app/build/outputs/apk/meta/release/* \
+            --target ${{ github.ref_name }} \
             --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
