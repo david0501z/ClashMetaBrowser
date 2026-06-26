@@ -180,7 +180,7 @@
             android:label="@string/help" />
         <activity
             android:name=".BrowserActivity"
-            android:configChanges="uiMode"
+            android:configChanges="uiMode|orientation|screenSize"
             android:exported="true"
             android:label="@string/browser" />
         <activity
@@ -232,7 +232,6 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.provider.Telephony.SECRET_CODE" />
-                <!-- 252746382 is the name of Clash Meta in T9 -->
                 <data android:scheme="android_secret_code" android:host="252746382" />
             </intent-filter>
         </receiver>
