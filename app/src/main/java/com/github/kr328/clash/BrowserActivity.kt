@@ -304,7 +304,6 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
                 val intent = Intent(this@BrowserActivity, MainActivity::class.java)
                 intent.flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                 startActivity(intent)
-                moveTaskToBack(false)
             } catch (e: Exception) {
                 Log.e("BrowserActivity", "Error in settings menu button click", e)
             }
@@ -665,7 +664,6 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
                     val intent = Intent(this@BrowserActivity, MainActivity::class.java)
                     intent.flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                     startActivity(intent)
-                    moveTaskToBack(false)
                     return true
                 }
             } catch (e: Exception) {
