@@ -210,9 +210,12 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
         // 初始化下拉刷新布局
         setupSwipeRefreshLayout(design)
 
-        // Create first tab - check if we have a URL from the intent
-        val initialUrl = intent.getStringExtra("url") ?: "https://www.google.com"
-        createNewTab(design, initialUrl)
+        // 尝试恢复之前保存的标签页（Activity被回收后重建时）
+        if (!restoreTabState(design)) {
+            // Create first tab - check if we have a URL from the intent
+            val initialUrl = intent.getStringExtra("url") ?: "https://www.google.com"
+            createNewTab(design, initialUrl)
+        }
 
         // Setup UI event listeners
         design.backButton.setOnClickListener {
@@ -896,6 +899,56 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
         }
     }
 
+    // ========== TAB 状态持久化（Activity 被回收后重建时恢复） ==========
+    
+    private fun saveTabState() {
+        try {
+            val prefs = getSharedPreferences("browser_tabs_save", Context.MODE_PRIVATE)
+            val urls = tabs.map { it.webView.url ?: it.url }
+            prefs.edit().apply {
+                putInt("count", urls.size)
+                putInt("current", currentTabIndex)
+                urls.forEachIndexed { i, url -> putString("url_$i", url) }
+                apply()
+            }
+            Log.d("BrowserActivity", "已保存 ${urls.size} 个标签页状态")
+        } catch (e: Exception) {
+            Log.e("BrowserActivity", "保存标签页状态失败", e)
+        }
+    }
+    
+    private fun restoreTabState(design: BrowserDesign): Boolean {
+        try {
+            val prefs = getSharedPreferences("browser_tabs_save", Context.MODE_PRIVATE)
+            val count = prefs.getInt("count", 0)
+            if (count <= 0 || tabs.isNotEmpty()) return false
+            
+            Log.d("BrowserActivity", "正在恢复 $count 个标签页")
+            for (i in 0 until count) {
+                val url = prefs.getString("url_$i", null) ?: continue
+                createNewTab(design, url)
+            }
+            if (tabs.isEmpty()) return false
+            
+            val savedIndex = prefs.getInt("current", 0)
+            if (savedIndex in 0 until tabs.size) {
+                switchToTab(design, savedIndex)
+            }
+            
+            // 清除已恢复的状态，防止重复恢复
+            prefs.edit().clear().apply()
+            return true
+        } catch (e: Exception) {
+            Log.e("BrowserActivity", "恢复标签页状态失败", e)
+            return false
+        }
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        saveTabState()
+    }
+    
     override fun onBackPressed() {
         try {
             val currentTab = tabs.getOrNull(currentTabIndex)
