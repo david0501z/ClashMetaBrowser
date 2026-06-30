@@ -904,14 +904,27 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
     private fun saveTabState() {
         try {
             val prefs = getSharedPreferences("browser_tabs_save", Context.MODE_PRIVATE)
-            val urls = tabs.map { it.webView.url ?: it.url }
-            prefs.edit().apply {
-                putInt("count", urls.size)
-                putInt("current", currentTabIndex)
-                urls.forEachIndexed { i, url -> putString("url_$i", url) }
-                apply()
+            val editor = prefs.edit()
+            val count = tabs.size
+            editor.putInt("count", count)
+            editor.putInt("current", currentTabIndex)
+            tabs.forEachIndexed { i, tab ->
+                editor.putString("url_$i", tab.webView.url ?: tab.url)
+                // 保存 WebView 完整状态（历史、滚动、表单等）
+                try {
+                    val ss = Bundle()
+                    tab.webView.saveState(ss)
+                    val p = android.os.Parcel.obtain()
+                    ss.writeToParcel(p, 0)
+                    val bytes = p.marshall()
+                    p.recycle()
+                    editor.putString("state_$i", android.util.Base64.encodeToString(bytes, 0))
+                } catch (e: Exception) {
+                    Log.e("BrowserActivity", "保存标签页 $i WebView 状态失败", e)
+                }
             }
-            Log.d("BrowserActivity", "已保存 ${urls.size} 个标签页状态")
+            editor.apply()
+            Log.d("BrowserActivity", "已保存 $count 个标签页完整状态")
         } catch (e: Exception) {
             Log.e("BrowserActivity", "保存标签页状态失败", e)
         }
@@ -925,17 +938,60 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
             
             Log.d("BrowserActivity", "正在恢复 $count 个标签页")
             for (i in 0 until count) {
-                val url = prefs.getString("url_$i", null) ?: continue
-                createNewTab(design, url)
+                val stateStr = prefs.getString("state_$i", null)
+                val fallbackUrl = prefs.getString("url_$i", null)
+                
+                val webView = WebView(this)
+                setupWebView(webView, design)
+                
+                var restored = false
+                if (stateStr != null) {
+                    try {
+                        val bytes = android.util.Base64.decode(stateStr, 0)
+                        val p = android.os.Parcel.obtain()
+                        p.unmarshall(bytes, 0, bytes.size)
+                        p.setDataPosition(0)
+                        val ss: Bundle = Bundle.CREATOR.createFromParcel(p)
+                        p.recycle()
+                        restored = webView.restoreState(ss)
+                    } catch (e: Exception) {
+                        Log.e("BrowserActivity", "反序列化标签页 $i 状态失败", e)
+                    }
+                }
+                if (!restored && fallbackUrl != null) {
+                    webView.loadUrl(fallbackUrl)
+                }
+                
+                val tab = BrowserTab(webView, url = fallbackUrl ?: "")
+                tabs.add(tab)
+                
+                // 把当前标签的 WebView 加入容器
+                if (tabs.size == 1) {
+                    webViewParent?.addView(webView, ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    ))
+                }
             }
             if (tabs.isEmpty()) return false
             
-            val savedIndex = prefs.getInt("current", 0)
-            if (savedIndex in 0 until tabs.size) {
-                switchToTab(design, savedIndex)
-            }
+            // 先移除所有 WebView，然后只显示当前标签
+            webViewParent?.removeAllViews()
+            val savedIndex = prefs.getInt("current", 0).coerceIn(0, tabs.size - 1)
+            currentTabIndex = savedIndex
+            val activeView = tabs[savedIndex].webView
+            webViewParent?.addView(activeView, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            ))
             
-            // 清除已恢复的状态，防止重复恢复
+            // 更新 UI
+            val activeTab = tabs[savedIndex]
+            val currentUrl = activeTab.webView.url
+            design.urlInput.setText(currentUrl ?: activeTab.url)
+            updateNavigationButtons(design)
+            updateTabsCount(design)
+            
             prefs.edit().clear().apply()
             return true
         } catch (e: Exception) {
