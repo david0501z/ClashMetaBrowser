@@ -2,8 +2,6 @@ package com.github.kr328.clash
 
 import android.app.DownloadManager
 import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -22,7 +20,6 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.*
 import android.widget.*
-import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
@@ -70,34 +67,22 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
             }
             val base64Data = dataUrl.substring(commaIndex + 1)
             val data = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-            
+
             val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "cfawb")
             if (!downloadsDir.exists()) {
                 downloadsDir.mkdirs()
             }
             val file = File(downloadsDir, filename)
-            
-            val fos = FileOutputStream(file)
-            fos.write(data)
-            fos.close()
-            
+
+            FileOutputStream(file).use { it.write(data) }
+
             android.media.MediaScannerConnection.scanFile(
                 this,
                 arrayOf(file.absolutePath),
                 arrayOf(mimeType),
                 null
             )
-            
-            val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val downloadUri = Uri.fromFile(file)
-            val request = DownloadManager.Request(downloadUri).apply {
-                setTitle(filename)
-                setDescription("浏览器下载完成")
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setDestinationUri(Uri.fromFile(file))
-            }
-            downloadManager.enqueue(request)
-            
+
             runOnUiThread {
                 Toast.makeText(this, "文件已下载: $filename", Toast.LENGTH_LONG).show()
             }
@@ -106,17 +91,6 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
             runOnUiThread {
                 Toast.makeText(this, "下载失败: ${e.message}", Toast.LENGTH_LONG).show()
             }
-        }
-    }
-    
-    private fun copyToClipboard(message: String) {
-        try {
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText("BrowserActivity Log", message)
-            clipboard.setPrimaryClip(clip)
-            Log.d("BrowserActivity", "Copied to clipboard: $message")
-        } catch (e: Exception) {
-            Log.e("BrowserActivity", "Failed to copy to clipboard", e)
         }
     }
     
@@ -197,11 +171,10 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
     private var swipeRefreshLayout: SwipeRefreshLayout? = null
     private var webViewParent: FrameLayout? = null
 
-    private var designRef: BrowserDesign? = null
+    private var keyboardListener: ViewTreeObserver.OnGlobalLayoutListener? = null
 
     override suspend fun main() {
         val design = BrowserDesign(this)
-        designRef = design
 
         setContentDesign(design)
 
@@ -338,26 +311,24 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
 
         // Add keyboard visibility listener
         val rootView = findViewById<View>(android.R.id.content)
-        rootView.viewTreeObserver.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
+        keyboardListener = object : ViewTreeObserver.OnGlobalLayoutListener {
             override fun onGlobalLayout() {
                 val rect = android.graphics.Rect()
                 rootView.getWindowVisibleDisplayFrame(rect)
                 val screenHeight = rootView.height
                 val keypadHeight = screenHeight - rect.bottom
 
+                val bottomNav = design.bottomNavContainer
+                val layoutParams = bottomNav.layoutParams as ViewGroup.MarginLayoutParams
                 if (keypadHeight > screenHeight * 0.15) {
-                    val bottomNav = design.bottomNavContainer
-                    val layoutParams = bottomNav.layoutParams as ViewGroup.MarginLayoutParams
                     layoutParams.bottomMargin = keypadHeight
-                    bottomNav.layoutParams = layoutParams
                 } else {
-                    val bottomNav = design.bottomNavContainer
-                    val layoutParams = bottomNav.layoutParams as ViewGroup.MarginLayoutParams
                     layoutParams.bottomMargin = 0
-                    bottomNav.layoutParams = layoutParams
                 }
+                bottomNav.layoutParams = layoutParams
             }
-        })
+        }
+        rootView.viewTreeObserver.addOnGlobalLayoutListener(keyboardListener)
 
         while (isActive) {
             events.receive()
@@ -721,26 +692,6 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
         }
         prefs.edit().putStringSet("history", history).apply()
     }
-    
-    private fun getHistory(): List<HistoryEntry> {
-        val prefs = getSharedPreferences("browser_history", Context.MODE_PRIVATE)
-        val historySet = prefs.getStringSet("history", mutableSetOf()) ?: setOf()
-        return historySet.mapNotNull { entry ->
-            val parts = entry.split("|", limit = 3)
-            if (parts.size >= 3) {
-                val timestamp = parts[0].toLongOrNull() ?: 0L
-                HistoryEntry(timestamp, parts[1], parts[2])
-            } else {
-                null
-            }
-        }.sortedByDescending { it.timestamp }
-    }
-    
-    data class HistoryEntry(
-        val timestamp: Long,
-        val title: String,
-        val url: String
-    )
 
     private fun extractDomain(url: String): String {
         return try {
@@ -968,7 +919,7 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
         val newUrl = intent.getStringExtra("url")
         // 从外部 intent 接收 URL 时创建新标签，不覆盖当前标签
         if (!newUrl.isNullOrBlank()) {
-            designRef?.let { createNewTab(it, newUrl) }
+            design?.let { createNewTab(it, newUrl) }
         } else {
             tabs.getOrNull(currentTabIndex)?.webView?.requestFocus()
         }
@@ -978,6 +929,29 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
         super.onResume()
         val currentTab = tabs.getOrNull(currentTabIndex)
         currentTab?.webView?.requestFocus()
+    }
+
+    override fun onDestroy() {
+        keyboardListener?.let { listener ->
+            findViewById<View>(android.R.id.content)?.viewTreeObserver?.removeOnGlobalLayoutListener(listener)
+        }
+        keyboardListener = null
+
+        tabs.forEach { tab ->
+            try {
+                tab.webView.stopLoading()
+                tab.webView.removeAllViews()
+                tab.webView.destroy()
+            } catch (e: Exception) {
+                Log.e("BrowserActivity", "Error destroying WebView", e)
+            }
+        }
+        tabs.clear()
+
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = null
+
+        super.onDestroy()
     }
 
     private var filePathCallback: ValueCallback<Array<Uri>?>? = null

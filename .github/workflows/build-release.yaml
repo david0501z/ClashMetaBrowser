@@ -59,24 +59,22 @@ jobs:
           IFS='.' read -ra VERSION_PARTS <<< "$VERSION_TAG"         # split into array
           VERSION_CODE=$(printf "%1d%02d%03d" "${VERSION_PARTS[0]}" "${VERSION_PARTS[1]}" "${VERSION_PARTS[2]}")
           
-          echo "versonName=$VERSION_TAG" >> $GITHUB_OUTPUT          # "1.2.3"
-          echo "versonCode=$VERSION_CODE" >> $GITHUB_OUTPUT         # "102003"
+          echo "versionName=$VERSION_TAG" >> $GITHUB_OUTPUT          # "1.2.3"
+          echo "versionCode=$VERSION_CODE" >> $GITHUB_OUTPUT         # "102003"
       
       # Re-write version in build.gradle.kts
       - name: Re-write version
         uses: Devofure/advance-android-version-actions@v1.5
         with:
           gradlePath: build.gradle.kts
-          versionCode: ${{ steps.process-version.outputs.versonCode }}
-          versionName: ${{ steps.process-version.outputs.versonName }}
+          versionCode: ${{ steps.process-version.outputs.versionCode }}
+          versionName: ${{ steps.process-version.outputs.versionName }}
       
       - name: Update CA
         run: |
           sudo apt-get update && sudo apt-get install ca-certificates
           sudo update-ca-certificates
           cp -f /etc/ssl/certs/ca-certificates.crt core/src/foss/golang/clash/component/ca/ca-certificates.crt
-
-
 
       - name: Signing properties
         env:
@@ -89,8 +87,7 @@ jobs:
           echo key.alias="$SIGNING_KEY_ALIAS" >> signing.properties
           echo key.password="$SIGNING_KEY_PASSWORD" >> signing.properties
             
-          echo "cat signing.properties"
-          cat signing.properties
+          echo "Signing properties created (not logging sensitive values)"
 
       - name: Release Build
         if: success()
