@@ -24,4 +24,5 @@ dependencies {
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.viewpager)
     implementation(libs.google.material)
+    implementation(libs.zxing.core)
 }
