@@ -1,6 +1,5 @@
 package com.github.kr328.clash
 
-import android.app.DownloadManager
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -20,7 +19,6 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.*
 import android.widget.*
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
@@ -29,10 +27,21 @@ import kotlinx.coroutines.isActive
 import java.io.File
 import android.view.ViewTreeObserver
 import java.io.FileOutputStream
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.URL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class BrowserActivity : BaseActivity<BrowserDesign>() {
     companion object {
         private const val REQUEST_CODE_FILE_CHOOSER = 1001
+        // 浏览器页面通过本地 Clash 代理 (mixed-port) 访问网络，下载必须走同一代理，
+        // 否则系统 DownloadManager 会绕过代理直连导致下载失败/被墙。
+        private const val PROXY_HOST = "127.0.0.1"
+        private const val PROXY_PORT = 7890
     }
     
     private data class BrowserTab(
@@ -168,7 +177,6 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
     private val tabs = mutableListOf<BrowserTab>()
     private var currentTabIndex = 0
     private var isLoading = false
-    private var swipeRefreshLayout: SwipeRefreshLayout? = null
     private var webViewParent: FrameLayout? = null
 
     private var keyboardListener: ViewTreeObserver.OnGlobalLayoutListener? = null
@@ -181,7 +189,7 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
         setupProxy()
 
         // 初始化下拉刷新布局
-        setupSwipeRefreshLayout(design)
+        setupWebViewContainer(design)
 
         // 尝试恢复之前保存的标签页（Activity被回收后重建时）
         if (!restoreTabState(design)) {
@@ -376,7 +384,7 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
             val previousTab = tabs.getOrNull(currentTabIndex)
             val newTab = tabs[index]
 
-            // Use webViewParent (inside SwipeRefreshLayout) as the actual WebView container
+            // Use webViewParent as the WebView container
             val container = webViewParent
             if (container == null) {
                 Log.e("BrowserActivity", "webViewParent is null, cannot switch tab")
@@ -431,8 +439,6 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
             // 从正确的容器中移除 WebView
             webViewParent?.removeView(tabToClose.webView)
 
-            // 移除滚动监听器防止内存泄漏（OnScrollChangeListener 会在 WebView.destroy 时自动清理）
-
             // 正确销毁 WebView 释放 native 资源
             tabToClose.webView.stopLoading()
             tabToClose.webView.removeAllViews()
@@ -473,15 +479,6 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
             setSupportZoom(true)
         }
 
-        // 设置WebView的滚动监听，用于控制下拉刷新
-        // 使用 OnScrollChangeListener（API 23+），确保 WebView 内部滚动正确触发
-        val scrollListener = View.OnScrollChangeListener { _, _, _, _, _ ->
-            val canScrollUp = webView.canScrollVertically(-1)
-            swipeRefreshLayout?.isEnabled = !canScrollUp
-        }
-        webView.setOnScrollChangeListener(scrollListener)
-        webView.setTag(scrollListener)
-        
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url?.toString()
@@ -528,7 +525,6 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
                 super.onPageFinished(view, url)
                 isLoading = false
                 design.progressBar.visibility = View.GONE
-                swipeRefreshLayout?.isRefreshing = false
 
                 val currentIndex = tabs.indexOfFirst { it.webView == view }
                 if (currentIndex >= 0) {
@@ -650,7 +646,7 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
     private fun setupProxy() {
         if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
             val proxyConfig = ProxyConfig.Builder()
-                .addProxyRule("127.0.0.1:7890")
+                .addProxyRule("$PROXY_HOST:$PROXY_PORT")
                 .build()
             ProxyController.getInstance().setProxyOverride(proxyConfig, java.util.concurrent.Executors.newSingleThreadExecutor()) {
                 // Proxy override applied
@@ -707,46 +703,27 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
         design.tabsCountButton.contentDescription = "打开的页签数量: $tabCount"
     }
 
-    private fun setupSwipeRefreshLayout(design: BrowserDesign) {
-        swipeRefreshLayout = SwipeRefreshLayout(this).apply {
-            setOnRefreshListener {
-                val currentTab = tabs.getOrNull(currentTabIndex)
-                if (currentTab != null) {
-                    Log.d("BrowserActivity", "下拉刷新: 重新加载页面 ${currentTab.webView.url}")
-                    currentTab.webView.reload()
-                } else {
-                    isRefreshing = false
-                }
-            }
-            setColorSchemeResources(
-                android.R.color.holo_blue_bright,
-                android.R.color.holo_green_light,
-                android.R.color.holo_orange_light,
-                android.R.color.holo_red_light
-            )
-            isEnabled = false
-        }
-
-        // 创建一个 FrameLayout 作为 SwipeRefreshLayout 的唯一子 View
-        // WebView 将添加到这个 FrameLayout 中，而不是直接添加到 SwipeRefreshLayout
-        // 这样可以避免 SwipeRefreshLayout 只支持一个子 View 的限制
-        webViewParent = FrameLayout(this).apply {
+    private fun setupWebViewContainer(design: BrowserDesign) {
+        // 下拉刷新已完全移除：下拉手势全部交给页面自身，避免覆盖页面内的下拉操作（如下拉菜单）。
+        // 刷新统一走工具栏 reloadButton（webView.reload()）。
+        // FrameLayout 作为唯一容器承载各标签页的 WebView。
+        val parent = FrameLayout(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         }
-        swipeRefreshLayout!!.addView(webViewParent)
+        webViewParent = parent
 
-        // 将现有的 webViewContainer 中的子视图转移到 SwipeRefreshLayout 中
+        // 将现有的 webViewContainer 中的子视图转移到容器中
         val currentChildren = mutableListOf<View>()
         for (i in 0 until design.webViewContainer.childCount) {
             currentChildren.add(design.webViewContainer.getChildAt(i))
         }
         design.webViewContainer.removeAllViews()
-        design.webViewContainer.addView(swipeRefreshLayout)
+        design.webViewContainer.addView(parent)
         currentChildren.forEach { child ->
-            webViewParent?.addView(child)
+            parent.addView(child)
         }
     }
 
@@ -989,27 +966,60 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
     }
     
     private fun downloadFileViaApp(url: String, userAgent: String, contentDisposition: String, mimeType: String) {
-        try {
-            var filename = URLUtil.guessFileName(url, contentDisposition, mimeType)
-            if (filename.isEmpty()) {
-                filename = "downloaded_file"
+        var filename = URLUtil.guessFileName(url, contentDisposition, mimeType)
+        if (filename.isEmpty()) {
+            filename = "downloaded_file"
+        }
+        val finalName = filename
+        Toast.makeText(this@BrowserActivity, "开始下载: $finalName", Toast.LENGTH_SHORT).show()
+
+        // 通过本地 Clash 代理下载，而不是系统 DownloadManager（后者会绕过代理直连，导致被墙/失败）。
+        launch(Dispatchers.IO) {
+            var connection: HttpURLConnection? = null
+            try {
+                val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(PROXY_HOST, PROXY_PORT))
+                val conn = URL(url).openConnection(proxy) as HttpURLConnection
+                connection = conn
+                conn.requestMethod = "GET"
+                conn.setRequestProperty("User-Agent", userAgent)
+                conn.instanceFollowRedirects = true
+                conn.connectTimeout = 15000
+                conn.readTimeout = 30000
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    throw IOException("HTTP $code")
+                }
+
+                val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "cfawb")
+                if (!downloadsDir.exists()) {
+                    downloadsDir.mkdirs()
+                }
+                val file = File(downloadsDir, finalName)
+
+                conn.inputStream.use { input ->
+                    FileOutputStream(file).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+
+                android.media.MediaScannerConnection.scanFile(
+                    this@BrowserActivity,
+                    arrayOf(file.absolutePath),
+                    arrayOf(mimeType),
+                    null
+                )
+
+                runOnUiThread {
+                    Toast.makeText(this@BrowserActivity, "下载完成: $finalName", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                runOnUiThread {
+                    Toast.makeText(this@BrowserActivity, "下载失败(代理不可达或出错): ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                connection?.disconnect()
             }
-            val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val request = DownloadManager.Request(Uri.parse(url)).apply {
-                setTitle(filename)
-                setDescription("浏览器下载中")
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                addRequestHeader("User-Agent", userAgent)
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "cfawb/$filename")
-                setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
-            }
-            downloadManager.enqueue(request)
-            Toast.makeText(this@BrowserActivity, "开始下载: $filename", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            val errorMessage = "下载出错: ${e.message ?: "Unknown error"}"
-            Log.e("BrowserActivity", "Download exception", e)
-            Toast.makeText(this@BrowserActivity, errorMessage, Toast.LENGTH_SHORT).show()
         }
     }
 }
