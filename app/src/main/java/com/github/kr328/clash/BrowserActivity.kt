@@ -255,6 +255,15 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
             try {
                 val popup = PopupMenu(this, design.menuButton)
                 // Create menu items programmatically
+                popup.menu.add("下载管理").setOnMenuItemClickListener {
+                    try {
+                        val intent = Intent(this@BrowserActivity, DownloadManagerActivity::class.java)
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        Log.e("BrowserActivity", "Error opening download manager", e)
+                    }
+                    true
+                }
                 popup.menu.add("关闭").setOnMenuItemClickListener { 
                     finish()
                     true
