@@ -970,56 +970,9 @@ class BrowserActivity : BaseActivity<BrowserDesign>() {
         if (filename.isEmpty()) {
             filename = "downloaded_file"
         }
-        val finalName = filename
-        Toast.makeText(this@BrowserActivity, "开始下载: $finalName", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this@BrowserActivity, "开始下载: $filename", Toast.LENGTH_SHORT).show()
 
-        // 通过本地 Clash 代理下载，而不是系统 DownloadManager（后者会绕过代理直连，导致被墙/失败）。
-        launch(Dispatchers.IO) {
-            var connection: HttpURLConnection? = null
-            try {
-                val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(PROXY_HOST, PROXY_PORT))
-                val conn = URL(url).openConnection(proxy) as HttpURLConnection
-                connection = conn
-                conn.requestMethod = "GET"
-                conn.setRequestProperty("User-Agent", userAgent)
-                conn.instanceFollowRedirects = true
-                conn.connectTimeout = 15000
-                conn.readTimeout = 30000
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    throw IOException("HTTP $code")
-                }
-
-                val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "cfawb")
-                if (!downloadsDir.exists()) {
-                    downloadsDir.mkdirs()
-                }
-                val file = File(downloadsDir, finalName)
-
-                conn.inputStream.use { input ->
-                    FileOutputStream(file).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-
-                android.media.MediaScannerConnection.scanFile(
-                    this@BrowserActivity,
-                    arrayOf(file.absolutePath),
-                    arrayOf(mimeType),
-                    null
-                )
-
-                runOnUiThread {
-                    Toast.makeText(this@BrowserActivity, "下载完成: $finalName", Toast.LENGTH_LONG).show()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                runOnUiThread {
-                    Toast.makeText(this@BrowserActivity, "下载失败(代理不可达或出错): ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            } finally {
-                connection?.disconnect()
-            }
-        }
+        // 交给应用内下载管理器：走本地 Clash 代理 + 进度/暂停/续传/管理页
+        ProxyDownloadManager.download(this, url, filename, mimeType, userAgent)
     }
 }

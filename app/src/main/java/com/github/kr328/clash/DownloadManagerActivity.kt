@@ -2,18 +2,32 @@ package com.github.kr328.clash
 
 import android.os.Bundle
 import android.os.Environment
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.github.kr328.clash.design.DownloadManagerDesign
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.File
 
 class DownloadManagerActivity : BaseActivity<DownloadManagerDesign>() {
     private lateinit var downloadAdapter: DownloadAdapter
-    private val downloadList = mutableListOf<DownloadItem>()
-    private val downloadDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "cfawb")
-    private val browserDownloadDir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "browser_downloads")
+    private val downloadDir = File(
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+        "cfawb"
+    )
+    private val browserDownloadDir = File(
+        getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
+        "browser_downloads"
+    )
 
     override suspend fun main() {
         val design = DownloadManagerDesign(this)
@@ -21,97 +35,191 @@ class DownloadManagerActivity : BaseActivity<DownloadManagerDesign>() {
 
         initializeDownloadManager()
 
+        // 观察进行中的下载，实时刷新进度
+        launch {
+            ProxyDownloadManager.downloads.collectLatest { refreshList() }
+        }
+
         while (isActive) {
             events.receive()
         }
     }
 
     private fun initializeDownloadManager() {
-        // Create download directory if not exists
         if (!downloadDir.exists()) {
             downloadDir.mkdirs()
         }
-
-        // Load existing downloads
-        loadDownloads()
-
-        // Setup RecyclerView
-        downloadAdapter = DownloadAdapter(downloadList) { downloadItem ->
-            // Handle download item click - show options for the downloaded file
-            Toast.makeText(this, "Download item clicked: ${downloadItem.fileName}", Toast.LENGTH_SHORT).show()
-        }
-        
-        // Setup the RecyclerView with the design
+        downloadAdapter = DownloadAdapter(
+            onDownloadAction = { id, action ->
+                when (action) {
+                    "pause" -> ProxyDownloadManager.pause(id)
+                    "resume" -> ProxyDownloadManager.resume(this, id)
+                    "cancel" -> ProxyDownloadManager.cancel(id)
+                }
+                refreshList()
+            },
+            onFileClick = { file ->
+                Toast.makeText(
+                    this,
+                    "${file.name}  (${formatSize(file.length())})",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        )
         design?.downloadRecyclerView?.layoutManager = LinearLayoutManager(this)
         design?.downloadRecyclerView?.adapter = downloadAdapter
+        refreshList()
     }
 
-    private fun loadDownloads() {
-        downloadList.clear()
-        
-        // Load downloads from both directories
-        val directories = listOfNotNull(
+    private fun refreshList() {
+        val active = ProxyDownloadManager.downloads.value
+        val files = mutableListOf<File>()
+        listOfNotNull(
             downloadDir.takeIf { it.exists() },
             browserDownloadDir.takeIf { it.exists() }
-        )
-        
-        directories.forEach { dir ->
-            dir.listFiles()?.forEach { file ->
-                if (file.isFile) { // Only add files, not subdirectories
-                    downloadList.add(DownloadItem(file.name, file.length(), file.lastModified()))
-                }
-            }
+        ).forEach { dir ->
+            dir.listFiles()?.forEach { if (it.isFile) files.add(it) }
         }
-        downloadList.sortByDescending { it.timestamp }
+        files.sortByDescending { it.lastModified() }
+        downloadAdapter.submit(active, files)
     }
-
-
 }
 
-data class DownloadItem(
-    val fileName: String,
-    val fileSize: Long,
-    val timestamp: Long
-)
+private fun formatSize(size: Long): String {
+    return when {
+        size < 1024 -> "$size B"
+        size < 1024 * 1024 -> String.format("%.1f KB", size / 1024.0)
+        size < 1024 * 1024 * 1024 -> String.format("%.1f MB", size / (1024.0 * 1024.0))
+        else -> String.format("%.1f GB", size / (1024.0 * 1024.0 * 1024.0))
+    }
+}
 
 class DownloadAdapter(
-    private val downloads: List<DownloadItem>,
-    private val onItemClick: (DownloadItem) -> Unit
-) : RecyclerView.Adapter<DownloadAdapter.DownloadViewHolder>() {
+    private val onDownloadAction: (Long, String) -> Unit,
+    private val onFileClick: (File) -> Unit
+) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): DownloadViewHolder {
-        // Create a simple TextView for each download item
-        val textView = android.widget.TextView(parent.context)
-        textView.layoutParams = android.view.ViewGroup.LayoutParams(
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-        textView.setPadding(16, 16, 16, 16)
-        return DownloadViewHolder(textView)
+    private sealed class Row {
+        data class Active(val d: ProxyDownloadManager.ProxyDownload) : Row()
+        data class Completed(val file: File) : Row()
     }
 
-    override fun onBindViewHolder(holder: DownloadViewHolder, position: Int) {
-        val download = downloads[position]
-        holder.bind(download)
+    private var rows: List<Row> = emptyList()
+
+    fun submit(active: List<ProxyDownloadManager.ProxyDownload>, files: List<File>) {
+        val newRows = mutableListOf<Row>()
+        // 进行中的在前，已完成文件在后
+        newRows += active.map { Row.Active(it) }
+        newRows += files.map { Row.Completed(it) }
+        rows = newRows
+        notifyDataSetChanged()
     }
 
-    override fun getItemCount(): Int = downloads.size
+    override fun getItemCount(): Int = rows.size
 
-    inner class DownloadViewHolder(private val textView: android.widget.TextView) : 
-        RecyclerView.ViewHolder(textView) {
-        
-        fun bind(download: DownloadItem) {
-            textView.text = "${download.fileName} (${formatFileSize(download.fileSize)})"
-            textView.setOnClickListener { onItemClick(download) }
+    override fun getItemViewType(position: Int): Int =
+        if (rows[position] is Row.Active) 0 else 1
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        if (viewType == 0) {
+            return ActiveHolder(buildActiveView(parent))
         }
-        
-        private fun formatFileSize(size: Long): String {
-            return when {
-                size < 1024 -> "$size B"
-                size < 1024 * 1024 -> "${String.format("%.1f", size / 1024.0)} KB"
-                size < 1024 * 1024 * 1024 -> "${String.format("%.1f", size / (1024.0 * 1024.0))} MB"
-                else -> "${String.format("%.1f", size / (1024.0 * 1024.0 * 1024.0))} GB"
+        return CompletedHolder(buildCompletedView(parent))
+    }
+
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        when (val row = rows[position]) {
+            is Row.Active -> (holder as ActiveHolder).bind(row.d)
+            is Row.Completed -> (holder as CompletedHolder).bind(row.file)
+        }
+    }
+
+    private fun buildActiveView(parent: ViewGroup): View {
+        val lp = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        val container = LinearLayout(parent.context).apply {
+            layoutParams = lp
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 24, 32, 24)
+        }
+        val name = TextView(parent.context).apply { textSize = 14f; setPadding(0, 0, 0, 8) }
+        val progress = ProgressBar(
+            parent.context,
+            null,
+            android.R.attr.progressBarStyleHorizontal
+        ).apply { max = 1000 }
+        val status = TextView(parent.context).apply { textSize = 12f; setPadding(0, 8, 0, 8) }
+        val btnRow = LinearLayout(parent.context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START
+        }
+        val pause = Button(parent.context).apply { text = "暂停" }
+        val resume = Button(parent.context).apply { text = "继续" }
+        val cancel = Button(parent.context).apply { text = "取消" }
+        btnRow.addView(pause)
+        btnRow.addView(resume)
+        btnRow.addView(cancel)
+        container.addView(name)
+        container.addView(progress)
+        container.addView(status)
+        container.addView(btnRow)
+        container.tag = ActiveTag(name, progress, status, pause, resume, cancel)
+        return container
+    }
+
+    private fun buildCompletedView(parent: ViewGroup): View {
+        val lp = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        return TextView(parent.context).apply {
+            layoutParams = lp
+            setPadding(32, 24, 32, 24)
+            textSize = 14f
+        }
+    }
+
+    private class ActiveTag(
+        val name: TextView,
+        val progress: ProgressBar,
+        val status: TextView,
+        val pause: Button,
+        val resume: Button,
+        val cancel: Button
+    )
+
+    inner class ActiveHolder(view: View) : RecyclerView.ViewHolder(view) {
+        private val tag = view.tag as ActiveTag
+
+        fun bind(d: ProxyDownloadManager.ProxyDownload) {
+            tag.name.text = d.fileName
+            tag.progress.progress = (d.progress * 1000).toInt()
+            val stateText = when (d.state) {
+                ProxyDownloadManager.State.DOWNLOADING ->
+                    "${formatSize(d.downloadedBytes)} / ${if (d.totalBytes > 0) formatSize(d.totalBytes) else "?"} (${(d.progress * 100).toInt()}%)"
+                ProxyDownloadManager.State.PAUSED -> "已暂停 (${formatSize(d.downloadedBytes)})"
+                ProxyDownloadManager.State.COMPLETED -> "已完成 (${formatSize(d.downloadedBytes)})"
+                ProxyDownloadManager.State.FAILED -> "失败: ${d.error ?: "网络错误"}"
             }
+            tag.status.text = stateText
+            val showPause = d.state == ProxyDownloadManager.State.DOWNLOADING
+            tag.pause.visibility = if (showPause) View.VISIBLE else View.GONE
+            tag.resume.visibility = if (d.state == ProxyDownloadManager.State.PAUSED) View.VISIBLE else View.GONE
+            tag.cancel.visibility = if (d.state != ProxyDownloadManager.State.COMPLETED) View.VISIBLE else View.GONE
+            tag.pause.setOnClickListener { onDownloadAction(d.id, "pause") }
+            tag.resume.setOnClickListener { onDownloadAction(d.id, "resume") }
+            tag.cancel.setOnClickListener { onDownloadAction(d.id, "cancel") }
+        }
+    }
+
+    inner class CompletedHolder(view: View) : RecyclerView.ViewHolder(view) {
+        private val textView = view as TextView
+
+        fun bind(file: File) {
+            textView.text = "${file.name}  (${formatSize(file.length())})"
+            textView.setOnClickListener { onFileClick(file) }
         }
     }
 }
