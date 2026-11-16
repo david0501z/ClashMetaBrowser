@@ -24,10 +24,9 @@ class DownloadManagerActivity : BaseActivity<DownloadManagerDesign>() {
         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
         "cfawb"
     )
-    private val browserDownloadDir = File(
-        getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
-        "browser_downloads"
-    )
+    private val browserDownloadDir by lazy {
+        File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "browser_downloads")
+    }
 
     override suspend fun main() {
         val design = DownloadManagerDesign(this)
